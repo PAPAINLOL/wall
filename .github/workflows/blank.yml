@@ -1,0 +1,52 @@
+# .github/workflows/build-apk.yml
+name: Build APK y Release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # necesario para crear el Release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Dar permisos a gradlew
+        run: chmod +x ./gradlew
+
+      - name: Build APK (debug)
+        run: ./gradlew assembleDebug
+
+      - name: Localizar el APK generado
+        id: find_apk
+        run: |
+          APK_PATH=$(find . -name "*.apk" -path "*debug*" | head -n 1)
+          echo "Encontrado: $APK_PATH"
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Generar tag de versión
+        id: vars
+        run: echo "tag=v$(date +'%Y.%m.%d')-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Crear Release y subir APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: Build ${{ steps.vars.outputs.tag }}
+          files: ${{ steps.find_apk.outputs.apk_path }}
+          generate_release_notes: true
