@@ -14,11 +14,31 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # necesario para crear el Release
+      contents: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # --- DIAGNÓSTICO: enséñame qué hay realmente en el repo ---
+      - name: Instalar tree
+        run: sudo apt-get update -y && sudo apt-get install -y tree
+
+      - name: Árbol completo del repo (sin .git)
+        run: tree -a -L 4 -I ".git"
+
+      - name: Listado detallado (por si tree se corta)
+        run: find . -not -path "./.git/*" -maxdepth 5 | sort
+
+      - name: Buscar todos los gradlew del repo
+        run: find . -iname "gradlew*" -not -path "./.git/*"
+
+      - name: Buscar todos los settings.gradle / build.gradle
+        run: find . -iname "*.gradle*" -not -path "./.git/*"
+
+      - name: Mostrar settings.gradle si existe
+        run: cat $(find . -iname "settings.gradle*" -not -path "./.git/*" | head -n 1) 2>/dev/null || echo "No se encontró settings.gradle"
+      # --- FIN DIAGNÓSTICO ---
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -26,10 +46,24 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Localizar carpeta con gradlew
+        id: locate
+        run: |
+          GRADLEW_PATH=$(find . -iname "gradlew" -not -path "./.git/*" | head -n 1)
+          if [ -z "$GRADLEW_PATH" ]; then
+            echo "No se encontró gradlew en el repo. Revisa el paso de diagnóstico arriba."
+            exit 1
+          fi
+          GRADLE_DIR=$(dirname "$GRADLEW_PATH")
+          echo "gradlew encontrado en: $GRADLEW_PATH"
+          echo "dir=$GRADLE_DIR" >> "$GITHUB_OUTPUT"
+
       - name: Dar permisos a gradlew
+        working-directory: ${{ steps.locate.outputs.dir }}
         run: chmod +x ./gradlew
 
       - name: Build APK (debug)
+        working-directory: ${{ steps.locate.outputs.dir }}
         run: ./gradlew assembleDebug
 
       - name: Localizar el APK generado
