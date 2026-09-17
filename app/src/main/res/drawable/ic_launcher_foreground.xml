@@ -1,0 +1,33 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- TV / Screen frame -->
+    <path
+        android:fillColor="#FF5722"
+        android:pathData="M26,30 h56 c3.3,0 6,2.7 6,6 v34 c0,3.3 -2.7,6 -6,6 h-56 c-3.3,0 -6,-2.7 -6,-6 v-34 c0,-3.3 2.7,-6 6,-6 z" />
+    <!-- Screen inner display -->
+    <path
+        android:fillColor="#1E1E2C"
+        android:pathData="M29,33 h50 c1.6,0 3,1.4 3,3 v28 c0,1.6 -1.4,3 -3,3 h-50 c-1.6,0 -3,-1.4 -3,-3 v-28 c0,-1.6 1.4,-3 3,-3 z" />
+    <!-- Image landscape mountains and sun inside TV -->
+    <path
+        android:fillColor="#FFB74D"
+        android:pathData="M40,42 a4,4 0 1,0 0.01,0" />
+    <path
+        android:fillColor="#64B5F6"
+        android:pathData="M31,61 l15,-15 l10,10 l12,-12 l11,17 z" />
+    <!-- TV Stand -->
+    <path
+        android:fillColor="#FF5722"
+        android:pathData="M48,76 h12 v4 h-12 z M42,80 h24 v3 h-24 z" />
+    <!-- Reddit-styled antenna on top -->
+    <path
+        android:fillColor="#FF9800"
+        android:pathData="M54,23 a3.5,3.5 0 1,0 0.01,0" />
+    <path
+        android:strokeColor="#FF9800"
+        android:strokeWidth="2.5"
+        android:pathData="M54,26.5 L54,30" />
+</vector>

@@ -1,0 +1,6 @@
+{
+  "name": "Reddit Wallpapers",
+  "description": "Explora y proyecta fondos de pantalla desde tus subreddits favoritos sin recortar imágenes, con soporte para Android TV, tablets y móviles con bordes de color adaptativos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
