@@ -12,11 +12,27 @@ data class SubredditInfo(
     companion object {
         val DEFAULT_SUBREDDITS = listOf(
             SubredditInfo(
-                name = "albumartPorn",
+                name = "sssfdg",
+                displayName = "sssfdg",
+                description = "Subreddit principal seleccionado por defecto",
+                iconEmoji = "🔥",
+                isEnabled = true,
+                category = "Favoritos"
+            ),
+            SubredditInfo(
+                name = "AlbumCovers",
                 displayName = "Album Covers",
-                description = "Portadas de álbumes icónicas, alta resolución y diseño",
+                description = "Portadas de álbumes de música icónicas y en alta resolución",
                 iconEmoji = "🎵",
                 isEnabled = true,
+                category = "Música & Arte"
+            ),
+            SubredditInfo(
+                name = "albumartPorn",
+                displayName = "Album Art Porn",
+                description = "Diseños de portadas maestras de vinilos y discos",
+                iconEmoji = "💿",
+                isEnabled = false,
                 category = "Música & Arte"
             ),
             SubredditInfo(
@@ -24,7 +40,7 @@ data class SubredditInfo(
                 displayName = "Gatos Borrosos",
                 description = "Fotos borrosas, absurdas y cómicas de felinos en movimiento",
                 iconEmoji = "🐱",
-                isEnabled = true,
+                isEnabled = false,
                 category = "Humor & Animales"
             ),
             SubredditInfo(
@@ -32,7 +48,7 @@ data class SubredditInfo(
                 displayName = "Hmmm...",
                 description = "Imágenes extrañas, desconcertantes y humor sin contexto",
                 iconEmoji = "🤔",
-                isEnabled = true,
+                isEnabled = false,
                 category = "Humor & Extraño"
             ),
             SubredditInfo(
@@ -40,7 +56,7 @@ data class SubredditInfo(
                 displayName = "Curiosidades",
                 description = "Fotografías de cosas ligeramente interesantes de la vida real",
                 iconEmoji = "✨",
-                isEnabled = true,
+                isEnabled = false,
                 category = "Descubrimiento"
             ),
             SubredditInfo(
@@ -48,7 +64,7 @@ data class SubredditInfo(
                 displayName = "Fondos Clásicos",
                 description = "Colección general de fondos de pantalla en alta resolución",
                 iconEmoji = "🖼️",
-                isEnabled = true,
+                isEnabled = false,
                 category = "Paisajes & Fondos"
             ),
             SubredditInfo(

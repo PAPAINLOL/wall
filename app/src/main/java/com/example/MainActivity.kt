@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.components.FavoritesAndGallerySheet
+import com.example.ui.components.LogsSheet
 import com.example.ui.components.SettingsSheet
 import com.example.ui.components.SubredditsSheet
 import com.example.ui.components.WallpaperCanvasViewer
@@ -86,6 +87,7 @@ fun WallpaperAppContent(viewModel: WallpaperViewModel) {
     var showSubredditsSheet by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showGallerySheet by remember { mutableStateOf(false) }
+    var showLogsSheet by remember { mutableStateOf(false) }
 
     // Photo picker launcher for picking from Android local gallery
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -128,7 +130,10 @@ fun WallpaperAppContent(viewModel: WallpaperViewModel) {
         currentSort = uiState.settings.feedSort,
         onSelectSort = { viewModel.setFeedSort(it) },
         isCachedLocally = uiState.isCurrentPostCached,
-        onOpenSubreddits = { showSubredditsSheet = true }
+        onOpenSubreddits = { showSubredditsSheet = true },
+        onRefreshAllNew = { viewModel.refreshWithAllNew() },
+        onOpenLogs = { showLogsSheet = true },
+        isFetchingMore = uiState.isFetchingMore
     )
 
     // Bottom Sheets
@@ -151,7 +156,11 @@ fun WallpaperAppContent(viewModel: WallpaperViewModel) {
             cachedCount = uiState.cachedImagesCount,
             cacheSize = uiState.cacheSizeString,
             onCacheAll = { viewModel.cacheAllCurrentImages() },
-            onClearCache = { viewModel.clearLocalCache() }
+            onClearCache = { viewModel.clearLocalCache() },
+            onSetMaxPostsLimit = { viewModel.setMaxPostsLimit(it) },
+            onSetRedditApiCredentials = { id, sec -> viewModel.setRedditApiCredentials(id, sec) },
+            onOpenLogs = { showLogsSheet = true },
+            onRefreshAllNew = { viewModel.refreshWithAllNew() }
         )
     }
 
@@ -174,6 +183,12 @@ fun WallpaperAppContent(viewModel: WallpaperViewModel) {
             allPosts = uiState.posts,
             onSelectPost = { index -> viewModel.jumpToPost(index) },
             onDismiss = { showGallerySheet = false }
+        )
+    }
+
+    if (showLogsSheet) {
+        LogsSheet(
+            onDismiss = { showLogsSheet = false }
         )
     }
 }

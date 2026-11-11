@@ -21,11 +21,15 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.ViewCarousel
 import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -37,12 +41,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -59,7 +69,6 @@ import com.example.ui.theme.DarkSurfaceContainer
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.NeonPurple
 import com.example.ui.theme.RedditOrange
-import com.example.util.HumorHelper
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,10 +86,18 @@ fun SettingsSheet(
     cachedCount: Int = 0,
     cacheSize: String = "0 MB",
     onCacheAll: () -> Unit = {},
-    onClearCache: () -> Unit = {}
+    onClearCache: () -> Unit = {},
+    onSetMaxPostsLimit: (Int) -> Unit = {},
+    onSetRedditApiCredentials: (String, String) -> Unit = { _, _ -> },
+    onOpenLogs: () -> Unit = {},
+    onRefreshAllNew: () -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scrollState = rememberScrollState()
+
+    var clientIdInput by remember { mutableStateOf(settings.redditClientId) }
+    var clientSecretInput by remember { mutableStateOf(settings.redditClientSecret) }
+    var showApiSettings by remember { mutableStateOf(settings.redditClientId.isNotBlank()) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -101,14 +118,33 @@ fun SettingsSheet(
                 color = Color.White
             )
             Text(
-                text = "Personaliza la reproducción, ordenación 'Top'/'New', caché local y bordes sin recorte",
+                text = "Personaliza la reproducción, ordenación 'Top'/'New', caché local y límite de fotos",
                 style = MaterialTheme.typography.bodySmall,
                 color = Color.White.copy(alpha = 0.7f)
             )
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Subreddit quick launcher button
+            // Action: Actualizar con todas las nuevas (User request)
+            Button(
+                onClick = {
+                    onDismiss()
+                    onRefreshAllNew()
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = NeonCyan),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("refresh_all_new_sheet_button")
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.Black)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Actualizar con todas las nuevas", fontWeight = FontWeight.Bold, color = Color.Black)
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Action: Subreddit quick launcher button
             Button(
                 onClick = {
                     onDismiss()
@@ -122,32 +158,96 @@ fun SettingsSheet(
             ) {
                 Icon(Icons.Default.Tv, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Gestionar Subreddits & Fuentes", fontWeight = FontWeight.Bold)
+                Text("Gestionar Subreddits (sssfdg & AlbumCovers)", fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Action: Open system logs (User request)
+            Button(
+                onClick = {
+                    onDismiss()
+                    onOpenLogs()
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = NeonPurple),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("open_logs_sheet_button")
+            ) {
+                Icon(Icons.Default.Terminal, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Ver Logs Detallados del Sistema & Red", fontWeight = FontWeight.Bold)
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
             // Add from local gallery button
-            Button(
+            OutlinedButton(
                 onClick = onPickGalleryImage,
-                colors = ButtonDefaults.buttonColors(containerColor = NeonPurple.copy(alpha = 0.8f)),
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("add_gallery_photo_button")
             ) {
-                Icon(Icons.Default.AddPhotoAlternate, contentDescription = null)
+                Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, tint = Color.White)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Añadir Foto desde tu Galería", fontWeight = FontWeight.Bold)
+                Text("Añadir Foto desde tu Galería", fontWeight = FontWeight.Bold, color = Color.White)
             }
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Section 1: Modo de Ordenación (Top vs New)
+            // Section 1: Límite Máximo de Fotos (Auto-Paginación al acabar fotos)
+            SectionHeader(
+                icon = Icons.Default.ViewCarousel,
+                title = "Límite Máximo de Fotos (Paginación)",
+                subtitle = "Al agotarse las fotos se piden más automáticamente hasta este tope"
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                DisplaySettings.AVAILABLE_MAX_LIMITS.forEach { (limitVal, label) ->
+                    val isSelected = settings.maxPostsLimit == limitVal
+                    Surface(
+                        color = if (isSelected) NeonCyan else DarkSurfaceContainer,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { onSetMaxPostsLimit(limitVal) }
+                            .testTag("limit_$limitVal")
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(vertical = 10.dp)
+                        ) {
+                            Text(
+                                text = "$limitVal",
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSelected) Color.Black else Color.White,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                }
+            }
+            Text(
+                text = "Límite actual: ${settings.maxPostsLimit} fotos en carrusel",
+                color = NeonCyan,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(top = 4.dp, start = 4.dp)
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Section 2: Modo de Ordenación (Top vs New)
             SectionHeader(
                 icon = Icons.Default.TrendingUp,
                 title = "Modo de Selección (Top vs New)",
-                subtitle = "Alterna entre fotos más votadas o más recientes"
+                subtitle = "Alterna entre fotos más votadas (Top) o más recientes (New)"
             )
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -203,7 +303,7 @@ fun SettingsSheet(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Section 2: Caché Local de Imágenes (Offline & Rendimiento)
+            // Section 3: Caché Local de Imágenes
             SectionHeader(
                 icon = Icons.Default.Storage,
                 title = "Caché Local de Imágenes",
@@ -271,7 +371,77 @@ fun SettingsSheet(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Section 3: Estilo de Bordes (MANDATORY: NO CROP)
+            // Section 4: API Key de Reddit (Opcional)
+            SectionHeader(
+                icon = Icons.Default.Key,
+                title = "API Key / Credenciales de Reddit (Opcional)",
+                subtitle = "Usa endpoints libres por defecto, o añade tus credenciales para evitar límites"
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DarkSurfaceContainer),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = "La aplicación funciona sin API key mediante enlaces públicos y respaldos, pero si tienes una API Key de Reddit para desarrolladores, puedes ponerla aquí:",
+                        fontSize = 12.sp,
+                        color = Color.White.copy(alpha = 0.7f)
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    OutlinedTextField(
+                        value = clientIdInput,
+                        onValueChange = { clientIdInput = it },
+                        label = { Text("Reddit Client ID", fontSize = 12.sp) },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = RedditOrange,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.3f),
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = clientSecretInput,
+                        onValueChange = { clientSecretInput = it },
+                        label = { Text("Reddit Client Secret", fontSize = 12.sp) },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = RedditOrange,
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.3f),
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Button(
+                        onClick = {
+                            onSetRedditApiCredentials(clientIdInput.trim(), clientSecretInput.trim())
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = RedditOrange),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text("Guardar Credenciales", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // Section 5: Estilo de Bordes (NO CROP)
             SectionHeader(
                 icon = Icons.Default.Palette,
                 title = "Ajuste de Imagen y Bordes",
@@ -327,7 +497,7 @@ fun SettingsSheet(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Section 4: Intervalo de Diapositiva
+            // Section 6: Intervalo de Diapositiva
             SectionHeader(
                 icon = Icons.Default.Timer,
                 title = "Intervalo de Diapositivas (TV & Proyector)",
@@ -367,7 +537,7 @@ fun SettingsSheet(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Section 5: Fondo de Pantalla & Reglas
+            // Section 7: Fondo de Pantalla & Reglas
             SectionHeader(
                 icon = Icons.Default.Wallpaper,
                 title = "Reglas de Fondo y Duplicados",

@@ -9,13 +9,16 @@ enum class BorderStyle(val title: String, val description: String) {
 }
 
 enum class FeedSort(
-    val param: String,
+    val endpointName: String,
+    val timeFilter: String?,
     val displayName: String,
     val icon: String,
     val description: String
 ) {
-    TOP("top?t=all", "Top", "🏆", "Basado en votos de los usuarios (mayor puntuación)"),
-    NEW("new", "New", "⏱️", "Orden cronológico reciente (publicaciones más nuevas)");
+    TOP("top", "all", "Top", "🏆", "Basado en votos de los usuarios (fotos más votadas de la historia)"),
+    NEW("new", null, "New", "⏱️", "Orden cronológico reciente (publicaciones más nuevas)");
+
+    val param: String get() = if (timeFilter != null) "$endpointName?t=$timeFilter" else endpointName
 
     companion object {
         val TOP_MONTH = TOP
@@ -39,7 +42,10 @@ data class DisplaySettings(
     val showPostInfo: Boolean = true,
     val showHumorousBadges: Boolean = true,
     val preventDuplicates: Boolean = true, // "No repetir"
-    val isAutoPlay: Boolean = true
+    val isAutoPlay: Boolean = true,
+    val maxPostsLimit: Int = 100, // Límite de fotos en memoria/caché antes de detener paginación automática
+    val redditClientId: String = "",
+    val redditClientSecret: String = ""
 ) {
     companion object {
         val AVAILABLE_INTERVALS = listOf(
@@ -52,6 +58,14 @@ data class DisplaySettings(
             900 to "15 minutos",
             1800 to "30 minutos",
             3600 to "1 hora"
+        )
+
+        val AVAILABLE_MAX_LIMITS = listOf(
+            25 to "25 fotos (Ligero)",
+            50 to "50 fotos",
+            100 to "100 fotos (Recomendado)",
+            200 to "200 fotos (Colección Grande)",
+            500 to "500 fotos (Máximo Épico)"
         )
     }
 }

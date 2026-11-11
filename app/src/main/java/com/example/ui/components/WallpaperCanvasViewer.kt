@@ -31,7 +31,9 @@ import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material3.CircularProgressIndicator
@@ -100,7 +102,10 @@ fun WallpaperCanvasViewer(
     currentSort: FeedSort = FeedSort.TOP,
     onSelectSort: (FeedSort) -> Unit = {},
     isCachedLocally: Boolean = false,
-    onOpenSubreddits: () -> Unit = {}
+    onOpenSubreddits: () -> Unit = {},
+    onRefreshAllNew: () -> Unit = {},
+    onOpenLogs: () -> Unit = {},
+    isFetchingMore: Boolean = false
 ) {
     val context = LocalContext.current
     var currentTimeString by remember { mutableStateOf("") }
@@ -381,6 +386,43 @@ fun WallpaperCanvasViewer(
                                 )
                             }
                             Spacer(modifier = Modifier.width(6.dp))
+
+                            // Refresh with all new button
+                            IconButton(
+                                onClick = onRefreshAllNew,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(Color.White.copy(alpha = 0.15f), CircleShape)
+                                    .testTag("refresh_all_new_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = "Actualizar con todas las nuevas",
+                                    tint = NeonCyan,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(6.dp))
+
+                            // System Logs button
+                            IconButton(
+                                onClick = onOpenLogs,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(Color.White.copy(alpha = 0.15f), CircleShape)
+                                    .testTag("open_logs_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Terminal,
+                                    contentDescription = "Logs detallados y red",
+                                    tint = NeonPurple,
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(6.dp))
+
                             IconButton(
                                 onClick = onToggleTvMode,
                                 modifier = Modifier
@@ -395,6 +437,22 @@ fun WallpaperCanvasViewer(
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
+                        }
+                    }
+
+                    if (isFetchingMore) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Surface(
+                            color = NeonPurple.copy(alpha = 0.25f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = "🔄 Obteniendo más fotos automáticamente al llegar al final...",
+                                color = NeonCyan,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
                         }
                     }
 

@@ -13,6 +13,9 @@ interface SubredditDao {
     @Query("SELECT * FROM subreddits ORDER BY isCustom DESC, orderIndex ASC, name ASC")
     fun getAllSubreddits(): Flow<List<SubredditEntity>>
 
+    @Query("SELECT * FROM subreddits")
+    suspend fun getAllSubredditsSync(): List<SubredditEntity>
+
     @Query("SELECT * FROM subreddits WHERE isEnabled = 1")
     suspend fun getEnabledSubreddits(): List<SubredditEntity>
 

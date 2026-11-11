@@ -14,6 +14,7 @@ import com.example.data.model.RedditPost
 import com.example.data.model.SubredditInfo
 import com.example.data.model.WallpaperTarget
 import com.example.data.repository.RedditRepository
+import com.example.util.AppLogger
 import com.example.util.LocalImageCacheManager
 import com.example.util.PaletteHelper
 import com.example.util.WallpaperManagerHelper
@@ -45,7 +46,8 @@ data class UiState(
     val error: String? = null,
     val cachedImagesCount: Int = 0,
     val cacheSizeString: String = "0 MB",
-    val isCurrentPostCached: Boolean = false
+    val isCurrentPostCached: Boolean = false,
+    val isFetchingMore: Boolean = false
 ) {
     val currentPost: RedditPost?
         get() = if (posts.isNotEmpty() && currentIndex in posts.indices) posts[currentIndex] else null
@@ -65,6 +67,7 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
     init {
         val db = AppDatabase.getDatabase(application)
         repository = RedditRepository(application, db)
+        AppLogger.i("WallpaperVM", "Iniciando WallpaperViewModel. Por defecto: TOP de r/sssfdg y r/AlbumCovers")
 
         viewModelScope.launch {
             repository.initializeDefaultsIfNeeded()
@@ -89,16 +92,21 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
     fun refreshPosts() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
+            val state = _uiState.value
+            AppLogger.i("WallpaperVM", "Cargando fotos para los subreddits activos (Modo: ${state.settings.feedSort.displayName})...")
             try {
                 val fetched = repository.fetchPostsFromEnabledSubreddits(
-                    sort = _uiState.value.settings.feedSort,
-                    preventDuplicates = _uiState.value.settings.preventDuplicates
+                    sort = state.settings.feedSort,
+                    preventDuplicates = state.settings.preventDuplicates,
+                    maxLimit = state.settings.maxPostsLimit,
+                    clientId = state.settings.redditClientId,
+                    clientSecret = state.settings.redditClientSecret
                 )
                 if (fetched.isNotEmpty()) {
                     val initialPost = fetched[0]
                     val initialColor = PaletteHelper.getBorderColorForPost(
                         postId = initialPost.id,
-                        style = _uiState.value.settings.borderStyle
+                        style = state.settings.borderStyle
                     )
                     val isCached = LocalImageCacheManager.isCached(
                         getApplication(),
@@ -120,13 +128,14 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
                     _uiState.update { it.copy(isLoading = false) }
                 }
             } catch (e: Exception) {
+                AppLogger.e("WallpaperVM", "Fallo al consultar posts online", e)
                 val fallback = repository.getCuratedFallbackPosts()
                 _uiState.update {
                     it.copy(
                         posts = fallback,
                         currentIndex = 0,
                         isLoading = false,
-                        error = "Modo sin conexión: cargando álbumes locales del instituto"
+                        error = "Modo sin conexión: usando portadas locales"
                     )
                 }
                 restartSlideshowTimer()
@@ -135,9 +144,70 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /**
+     * User requested: "un botón para actualizar con todas las nuevas"
+     * Clears cached pagination and loads all latest/top posts fresh.
+     */
+    fun refreshWithAllNew() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            val state = _uiState.value
+            AppLogger.i("WallpaperVM", "🔄 Actualizando con todas las nuevas publicaciones...")
+            repository.resetPagination()
+
+            try {
+                val fetched = repository.fetchPostsFromEnabledSubreddits(
+                    sort = state.settings.feedSort,
+                    preventDuplicates = state.settings.preventDuplicates,
+                    maxLimit = state.settings.maxPostsLimit,
+                    clientId = state.settings.redditClientId,
+                    clientSecret = state.settings.redditClientSecret
+                )
+                if (fetched.isNotEmpty()) {
+                    val initialPost = fetched[0]
+                    val initialColor = PaletteHelper.getBorderColorForPost(
+                        postId = initialPost.id,
+                        style = state.settings.borderStyle
+                    )
+                    val isCached = LocalImageCacheManager.isCached(
+                        getApplication(),
+                        initialPost.id,
+                        initialPost.imageUrl
+                    )
+                    _uiState.update {
+                        it.copy(
+                            posts = fetched,
+                            currentIndex = 0,
+                            currentBorderColor = initialColor,
+                            isLoading = false,
+                            isCurrentPostCached = isCached
+                        )
+                    }
+                    repository.markPostAsViewed(initialPost.id)
+                    restartSlideshowTimer()
+                    emitToast("🔄 ¡Actualizado! ${fetched.size} fotos cargadas de ${state.settings.feedSort.displayName}")
+                } else {
+                    _uiState.update { it.copy(isLoading = false) }
+                    emitToast("No se encontraron publicaciones en los subreddits activos")
+                }
+            } catch (e: Exception) {
+                AppLogger.e("WallpaperVM", "Error al actualizar con nuevas", e)
+                _uiState.update { it.copy(isLoading = false, error = e.message) }
+                emitToast("Error al conectar: ${e.message}")
+            }
+            refreshCacheStats()
+        }
+    }
+
     fun nextPost() {
         val state = _uiState.value
         if (state.posts.isEmpty()) return
+
+        // Auto-fetch more photos when approaching the end of current list
+        if (state.currentIndex >= state.posts.size - 2 && !state.isLoading && !state.isFetchingMore) {
+            checkAndFetchMorePosts()
+        }
+
         val nextIdx = (state.currentIndex + 1) % state.posts.size
         val post = state.posts[nextIdx]
         val newColor = PaletteHelper.getBorderColorForPost(
@@ -155,6 +225,42 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
         restartSlideshowTimer()
+    }
+
+    /**
+     * User requested: "al acabar las fotos se cojan más aún hasta un límite en ajustes"
+     */
+    private fun checkAndFetchMorePosts() {
+        val state = _uiState.value
+        if (state.posts.size >= state.settings.maxPostsLimit) {
+            AppLogger.i("WallpaperVM", "Límite máximo alcanzado (${state.posts.size}/${state.settings.maxPostsLimit}). No se solicitan más fotos.")
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isFetchingMore = true) }
+            try {
+                val updated = repository.fetchMorePosts(
+                    currentPosts = state.posts,
+                    sort = state.settings.feedSort,
+                    maxLimit = state.settings.maxPostsLimit,
+                    preventDuplicates = state.settings.preventDuplicates,
+                    clientId = state.settings.redditClientId,
+                    clientSecret = state.settings.redditClientSecret
+                )
+                if (updated.size > state.posts.size) {
+                    val added = updated.size - state.posts.size
+                    _uiState.update { it.copy(posts = updated, isFetchingMore = false) }
+                    AppLogger.s("WallpaperVM", "Paginación automática añadió $added fotos nuevas (total: ${updated.size})")
+                    refreshCacheStats()
+                } else {
+                    _uiState.update { it.copy(isFetchingMore = false) }
+                }
+            } catch (e: Exception) {
+                AppLogger.e("WallpaperVM", "Fallo al paginar más fotos", e)
+                _uiState.update { it.copy(isFetchingMore = false) }
+            }
+        }
     }
 
     fun previousPost() {
@@ -236,8 +342,24 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
             it.copy(settings = it.settings.copy(feedSort = sort))
         }
         refreshPosts()
-        val desc = if (sort == FeedSort.TOP) "🏆 Modo Top (Votos)" else "⏱️ Modo New (Cronológico)"
+        val desc = if (sort == FeedSort.TOP) "🏆 Modo Top (Mayor puntuación)" else "⏱️ Modo New (Más recientes)"
         emitToast(desc)
+    }
+
+    fun setMaxPostsLimit(limit: Int) {
+        _uiState.update {
+            it.copy(settings = it.settings.copy(maxPostsLimit = limit))
+        }
+        AppLogger.i("WallpaperVM", "Límite máximo de fotos cambiado a $limit")
+        emitToast("Límite de fotos ajustado a $limit")
+    }
+
+    fun setRedditApiCredentials(clientId: String, secret: String) {
+        _uiState.update {
+            it.copy(settings = it.settings.copy(redditClientId = clientId, redditClientSecret = secret))
+        }
+        AppLogger.i("WallpaperVM", "Credenciales de API de Reddit actualizadas")
+        emitToast("Credenciales de API de Reddit guardadas")
     }
 
     fun setWallpaperTarget(target: WallpaperTarget) {
@@ -288,7 +410,7 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
     fun restoreDefaultSubreddits() {
         viewModelScope.launch {
             repository.restoreDefaultSubreddits()
-            emitToast("Subreddits restaurados a la lista predeterminada")
+            emitToast("Subreddits restaurados por defecto: r/sssfdg y r/AlbumCovers")
             refreshPosts()
         }
     }
@@ -351,59 +473,54 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun cacheAllCurrentImages() {
+    fun refreshCacheStats() {
         viewModelScope.launch {
-            val context = getApplication<Application>().applicationContext
-            emitToast("Guardando fotos en caché del dispositivo...")
-            LocalImageCacheManager.prefetchPosts(context, _uiState.value.posts)
-            refreshCacheStats()
-            emitToast("¡Todas las fotos actuales están cacheadas localmente!")
+            val count = LocalImageCacheManager.getCacheCount(getApplication())
+            val size = LocalImageCacheManager.getCacheSizeMB(getApplication())
+            val currentPost = _uiState.value.currentPost
+            val isCurrentCached = if (currentPost != null) {
+                LocalImageCacheManager.isCached(getApplication(), currentPost.id, currentPost.imageUrl)
+            } else false
+
+            _uiState.update {
+                it.copy(
+                    cachedImagesCount = count,
+                    cacheSizeString = size,
+                    isCurrentPostCached = isCurrentCached
+                )
+            }
         }
     }
 
     fun clearLocalCache() {
-        val context = getApplication<Application>().applicationContext
-        LocalImageCacheManager.clearCache(context)
-        refreshCacheStats()
-        emitToast("Caché local de fotos limpiada")
+        viewModelScope.launch {
+            LocalImageCacheManager.clearCache(getApplication())
+            refreshCacheStats()
+            emitToast("Caché local limpiada")
+        }
     }
 
-    fun refreshCacheStats() {
-        val context = getApplication<Application>().applicationContext
-        val count = LocalImageCacheManager.getCacheCount(context)
-        val size = LocalImageCacheManager.getCacheSizeMB(context)
-        val currentPost = _uiState.value.currentPost
-        val isCached = currentPost != null && LocalImageCacheManager.isCached(context, currentPost.id, currentPost.imageUrl)
-        _uiState.update {
-            it.copy(cachedImagesCount = count, cacheSizeString = size, isCurrentPostCached = isCached)
+    fun cacheAllCurrentImages() {
+        viewModelScope.launch {
+            val posts = _uiState.value.posts
+            if (posts.isNotEmpty()) {
+                emitToast("Guardando ${posts.size} imágenes en disco...")
+                LocalImageCacheManager.prefetchPosts(getApplication(), posts)
+                refreshCacheStats()
+                emitToast("✓ Guardadas ${posts.size} imágenes en caché")
+            }
         }
     }
 
     private fun restartSlideshowTimer() {
         slideshowJob?.cancel()
-        if (!_uiState.value.settings.isAutoPlay) return
+        val settings = _uiState.value.settings
+        if (!settings.isAutoPlay) return
 
         slideshowJob = viewModelScope.launch {
-            val intervalMs = (_uiState.value.settings.intervalSeconds * 1000L).coerceAtLeast(3000L)
             while (isActive) {
-                delay(intervalMs)
-                val state = _uiState.value
-                if (state.posts.isNotEmpty()) {
-                    val nextIdx = (state.currentIndex + 1) % state.posts.size
-                    val post = state.posts[nextIdx]
-                    val newColor = PaletteHelper.getBorderColorForPost(
-                        postId = post.id,
-                        style = state.settings.borderStyle
-                    )
-                    val isCached = LocalImageCacheManager.isCached(getApplication(), post.id, post.imageUrl)
-                    _uiState.update {
-                        it.copy(currentIndex = nextIdx, currentBorderColor = newColor, isCurrentPostCached = isCached)
-                    }
-                    repository.markPostAsViewed(post.id)
-                    if (state.settings.autoSetWallpaperOnSlide) {
-                        applyCurrentAsWallpaper(silent = true)
-                    }
-                }
+                delay(settings.intervalSeconds * 1000L)
+                nextPost()
             }
         }
     }
