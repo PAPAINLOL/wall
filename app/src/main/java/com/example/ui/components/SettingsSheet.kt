@@ -90,14 +90,14 @@ fun SettingsSheet(
     onSetMaxPostsLimit: (Int) -> Unit = {},
     onSetRedditApiCredentials: (String, String) -> Unit = { _, _ -> },
     onOpenLogs: () -> Unit = {},
-    onRefreshAllNew: () -> Unit = {}
+    onRefreshAllNew: () -> Unit = {},
+    onOpenApiSetup: () -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scrollState = rememberScrollState()
 
-    var clientIdInput by remember { mutableStateOf(settings.redditClientId) }
-    var clientSecretInput by remember { mutableStateOf(settings.redditClientSecret) }
-    var showApiSettings by remember { mutableStateOf(settings.redditClientId.isNotBlank()) }
+    var clientIdInput by remember(settings.redditClientId) { mutableStateOf(settings.redditClientId) }
+    var clientSecretInput by remember(settings.redditClientSecret) { mutableStateOf(settings.redditClientSecret) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -178,6 +178,25 @@ fun SettingsSheet(
                 Icon(Icons.Default.Terminal, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Ver Logs Detallados del Sistema & Red", fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Action: Configure Reddit API key
+            Button(
+                onClick = {
+                    onDismiss()
+                    onOpenApiSetup()
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF5722)),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("open_api_setup_sheet_button")
+            ) {
+                Icon(Icons.Default.Key, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Configurar API de Reddit (Acceso 100%)", fontWeight = FontWeight.Bold)
             }
 
             Spacer(modifier = Modifier.height(10.dp))

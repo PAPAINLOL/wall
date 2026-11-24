@@ -17,7 +17,9 @@ import com.example.data.repository.RedditRepository
 import com.example.util.AppLogger
 import com.example.util.LocalImageCacheManager
 import com.example.util.PaletteHelper
+import com.example.util.RedditApiCredentialsManager
 import com.example.util.WallpaperManagerHelper
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -47,7 +49,8 @@ data class UiState(
     val cachedImagesCount: Int = 0,
     val cacheSizeString: String = "0 MB",
     val isCurrentPostCached: Boolean = false,
-    val isFetchingMore: Boolean = false
+    val isFetchingMore: Boolean = false,
+    val isShowingFallback: Boolean = false
 ) {
     val currentPost: RedditPost?
         get() = if (posts.isNotEmpty() && currentIndex in posts.indices) posts[currentIndex] else null
@@ -63,10 +66,27 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
     val toastEvents: SharedFlow<String> = _toastEvents.asSharedFlow()
 
     private var slideshowJob: Job? = null
+    private var prefetchJob: Job? = null
 
     init {
         val db = AppDatabase.getDatabase(application)
         repository = RedditRepository(application, db)
+
+        // Load saved Reddit API credentials if available
+        val savedClientId = RedditApiCredentialsManager.getClientId(application)
+        val savedClientSecret = RedditApiCredentialsManager.getClientSecret(application)
+        if (savedClientId.isNotBlank()) {
+            _uiState.update {
+                it.copy(
+                    settings = it.settings.copy(
+                        redditClientId = savedClientId,
+                        redditClientSecret = savedClientSecret
+                    )
+                )
+            }
+            AppLogger.s("WallpaperVM", "Cargadas credenciales de API de Reddit desde almacenamiento seguro")
+        }
+
         AppLogger.i("WallpaperVM", "Iniciando WallpaperViewModel. Por defecto: TOP de r/sssfdg y r/AlbumCovers")
 
         viewModelScope.launch {
@@ -95,15 +115,15 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
             val state = _uiState.value
             AppLogger.i("WallpaperVM", "Cargando fotos para los subreddits activos (Modo: ${state.settings.feedSort.displayName})...")
             try {
-                val fetched = repository.fetchPostsFromEnabledSubreddits(
+                val result = repository.fetchPostsFromEnabledSubreddits(
                     sort = state.settings.feedSort,
                     preventDuplicates = state.settings.preventDuplicates,
                     maxLimit = state.settings.maxPostsLimit,
                     clientId = state.settings.redditClientId,
                     clientSecret = state.settings.redditClientSecret
                 )
-                if (fetched.isNotEmpty()) {
-                    val initialPost = fetched[0]
+                if (result.posts.isNotEmpty()) {
+                    val initialPost = result.posts[0]
                     val initialColor = PaletteHelper.getBorderColorForPost(
                         postId = initialPost.id,
                         style = state.settings.borderStyle
@@ -115,30 +135,56 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                     _uiState.update {
                         it.copy(
-                            posts = fetched,
+                            posts = result.posts,
                             currentIndex = 0,
                             currentBorderColor = initialColor,
                             isLoading = false,
-                            isCurrentPostCached = isCached
+                            isCurrentPostCached = isCached,
+                            isShowingFallback = result.isFallback,
+                            error = result.errorMessage
                         )
                     }
                     repository.markPostAsViewed(initialPost.id)
                     restartSlideshowTimer()
+
+                    if (result.errorMessage != null) {
+                        emitToast("⚠️ ${result.errorMessage}")
+                    }
+
+                    // Prefetch images in background without blocking the UI
+                    prefetchJob?.cancel()
+                    prefetchJob = viewModelScope.launch(Dispatchers.IO) {
+                        repository.prefetchImagesAsync(result.posts)
+                        refreshCacheStats()
+                    }
                 } else {
-                    _uiState.update { it.copy(isLoading = false) }
+                    _uiState.update {
+                        it.copy(
+                            posts = emptyList(),
+                            isLoading = false,
+                            isShowingFallback = result.isFallback,
+                            error = result.errorMessage ?: "No se encontraron fotos en los subreddits activos"
+                        )
+                    }
+                    emitToast("⚠️ ${result.errorMessage ?: "No se encontraron fotos"}")
                 }
             } catch (e: Exception) {
                 AppLogger.e("WallpaperVM", "Fallo al consultar posts online", e)
                 val fallback = repository.getCuratedFallbackPosts()
+                val errMsg = e.message ?: "Error al conectar con Reddit"
                 _uiState.update {
                     it.copy(
                         posts = fallback,
                         currentIndex = 0,
                         isLoading = false,
-                        error = "Modo sin conexión: usando portadas locales"
+                        error = errMsg,
+                        isShowingFallback = true
                     )
                 }
+                emitToast("⚠️ $errMsg")
                 restartSlideshowTimer()
+            } finally {
+                _uiState.update { it.copy(isLoading = false) }
             }
             refreshCacheStats()
         }
@@ -156,15 +202,15 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
             repository.resetPagination()
 
             try {
-                val fetched = repository.fetchPostsFromEnabledSubreddits(
+                val result = repository.fetchPostsFromEnabledSubreddits(
                     sort = state.settings.feedSort,
                     preventDuplicates = state.settings.preventDuplicates,
                     maxLimit = state.settings.maxPostsLimit,
                     clientId = state.settings.redditClientId,
                     clientSecret = state.settings.redditClientSecret
                 )
-                if (fetched.isNotEmpty()) {
-                    val initialPost = fetched[0]
+                if (result.posts.isNotEmpty()) {
+                    val initialPost = result.posts[0]
                     val initialColor = PaletteHelper.getBorderColorForPost(
                         postId = initialPost.id,
                         style = state.settings.borderStyle
@@ -176,24 +222,58 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                     _uiState.update {
                         it.copy(
-                            posts = fetched,
+                            posts = result.posts,
                             currentIndex = 0,
                             currentBorderColor = initialColor,
                             isLoading = false,
-                            isCurrentPostCached = isCached
+                            isCurrentPostCached = isCached,
+                            isShowingFallback = result.isFallback,
+                            error = result.errorMessage
                         )
                     }
                     repository.markPostAsViewed(initialPost.id)
                     restartSlideshowTimer()
-                    emitToast("🔄 ¡Actualizado! ${fetched.size} fotos cargadas de ${state.settings.feedSort.displayName}")
+
+                    if (result.errorMessage != null) {
+                        emitToast("⚠️ ${result.errorMessage}")
+                    } else {
+                        emitToast("🔄 ¡Actualizado! ${result.posts.size} fotos reales cargadas (${state.settings.feedSort.displayName})")
+                    }
+
+                    // Prefetch images in background without blocking the UI
+                    prefetchJob?.cancel()
+                    prefetchJob = viewModelScope.launch(Dispatchers.IO) {
+                        repository.prefetchImagesAsync(result.posts)
+                        refreshCacheStats()
+                    }
                 } else {
-                    _uiState.update { it.copy(isLoading = false) }
-                    emitToast("No se encontraron publicaciones en los subreddits activos")
+                    val errMsg = result.errorMessage ?: "No se encontraron publicaciones en los subreddits activos"
+                    _uiState.update {
+                        it.copy(
+                            posts = emptyList(),
+                            isLoading = false,
+                            isShowingFallback = result.isFallback,
+                            error = errMsg
+                        )
+                    }
+                    emitToast("⚠️ $errMsg")
                 }
             } catch (e: Exception) {
                 AppLogger.e("WallpaperVM", "Error al actualizar con nuevas", e)
-                _uiState.update { it.copy(isLoading = false, error = e.message) }
-                emitToast("Error al conectar: ${e.message}")
+                val fallback = repository.getCuratedFallbackPosts()
+                val errMsg = e.message ?: "Error al conectar con Reddit"
+                _uiState.update {
+                    it.copy(
+                        posts = fallback,
+                        currentIndex = 0,
+                        isLoading = false,
+                        error = errMsg,
+                        isShowingFallback = true
+                    )
+                }
+                emitToast("⚠️ $errMsg")
+            } finally {
+                _uiState.update { it.copy(isLoading = false) }
             }
             refreshCacheStats()
         }
@@ -249,10 +329,14 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
                     clientSecret = state.settings.redditClientSecret
                 )
                 if (updated.size > state.posts.size) {
-                    val added = updated.size - state.posts.size
+                    val existingIds = state.posts.map { it.id }.toSet()
+                    val newlyAdded = updated.filterNot { existingIds.contains(it.id) }
                     _uiState.update { it.copy(posts = updated, isFetchingMore = false) }
-                    AppLogger.s("WallpaperVM", "Paginación automática añadió $added fotos nuevas (total: ${updated.size})")
-                    refreshCacheStats()
+                    AppLogger.s("WallpaperVM", "Paginación automática añadió ${newlyAdded.size} fotos nuevas (total: ${updated.size})")
+                    viewModelScope.launch(Dispatchers.IO) {
+                        repository.prefetchImagesAsync(newlyAdded)
+                        refreshCacheStats()
+                    }
                 } else {
                     _uiState.update { it.copy(isFetchingMore = false) }
                 }
@@ -355,11 +439,13 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun setRedditApiCredentials(clientId: String, secret: String) {
+        RedditApiCredentialsManager.saveCredentials(getApplication(), clientId, secret)
         _uiState.update {
             it.copy(settings = it.settings.copy(redditClientId = clientId, redditClientSecret = secret))
         }
-        AppLogger.i("WallpaperVM", "Credenciales de API de Reddit actualizadas")
-        emitToast("Credenciales de API de Reddit guardadas")
+        AppLogger.s("WallpaperVM", "Credenciales de API de Reddit guardadas")
+        emitToast("✓ Credenciales de Reddit guardadas. Conectando...")
+        refreshWithAllNew()
     }
 
     fun setWallpaperTarget(target: WallpaperTarget) {
@@ -534,5 +620,6 @@ class WallpaperViewModel(application: Application) : AndroidViewModel(applicatio
     override fun onCleared() {
         super.onCleared()
         slideshowJob?.cancel()
+        prefetchJob?.cancel()
     }
 }

@@ -21,21 +21,22 @@ data class SubredditPage(
     val afterToken: String?
 )
 
+class RedditAuthRequiredException(message: String) : Exception(message)
+
 class RedditApiService {
 
+    // Fast, strict timeouts to prevent any 120s hangs or freezing
     private val client = OkHttpClient.Builder()
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(12, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(12, TimeUnit.SECONDS)
         .build()
 
-    // Rotating User-Agents to prevent blocks
-    private val userAgents = listOf(
-        "android:com.aistudio.redditwallpapers:v1.1.0 (by /u/tv_ambient_curator)",
-        "Mozilla/5.0 (Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-    )
+    private val userAgent = "android:com.aistudio.redditwallpapers:v1.2.0 (by /u/tv_curator)"
 
+    private val tokenLock = Any()
     private var cachedOAuthToken: String? = null
+    private var cachedCredHash: String? = null
     private var tokenExpiryTime: Long = 0
 
     suspend fun fetchSubredditPosts(
@@ -48,18 +49,31 @@ class RedditApiService {
     ): Result<SubredditPage> = withContext(Dispatchers.IO) {
         val cleanSub = subredditName.trim().removePrefix("r/").removePrefix("/").trim()
         val tag = "RedditApi"
-        AppLogger.i(tag, "Iniciando consulta para r/$cleanSub | Modo: ${sort.displayName} | Límite: $limit | After: ${after ?: "inicio"}")
+        AppLogger.i(tag, "Iniciando consulta para r/$cleanSub [Modo: ${sort.displayName} | after: ${after ?: "inicio"}]")
 
-        // 1. If user configured Reddit Client ID & Secret, try official OAuth endpoint first
-        if (!clientId.isNullOrBlank() && !clientSecret.isNullOrBlank()) {
-            val oauthResult = fetchWithOAuth(cleanSub, sort, limit, after, clientId.trim(), clientSecret.trim())
-            if (oauthResult != null && oauthResult.posts.isNotEmpty()) {
-                AppLogger.s(tag, "Éxito con Reddit OAuth oficial para r/$cleanSub: ${oauthResult.posts.size} fotos")
-                return@withContext Result.success(oauthResult)
+        val cleanId = clientId?.trim().orEmpty()
+        val cleanSecret = clientSecret?.trim().orEmpty()
+
+        // 1. If Reddit Client ID is provided, use official Reddit OAuth API
+        if (cleanId.isNotBlank()) {
+            AppLogger.i(tag, "Conectando vía Reddit OAuth oficial (oauth.reddit.com) para r/$cleanSub...")
+            val oauthResult = fetchWithOAuth(cleanSub, sort, limit, after, cleanId, cleanSecret)
+            if (oauthResult.isSuccess) {
+                val page = oauthResult.getOrThrow()
+                if (page.posts.isNotEmpty()) {
+                    AppLogger.s(tag, "✓ Reddit OAuth retornó ${page.posts.size} fotos reales para r/$cleanSub (after: ${page.afterToken ?: "fin"})")
+                } else {
+                    AppLogger.w(tag, "Reddit OAuth respondió HTTP 200 pero sin imágenes en esta página de r/$cleanSub")
+                }
+                return@withContext Result.success(page)
+            } else {
+                val err = oauthResult.exceptionOrNull()?.message ?: "Error OAuth desconocido"
+                AppLogger.e(tag, "Fallo en Reddit OAuth para r/$cleanSub: $err")
+                return@withContext Result.failure(RedditAuthRequiredException("Reddit OAuth falló: $err"))
             }
         }
 
-        // Build list of JSON endpoints (official + reliable public mirrors)
+        // 2. Fallback anonymous endpoints (only used if no Reddit Client ID is configured)
         val queryParams = mutableListOf("limit=$limit", "raw_json=1")
         if (sort.timeFilter != null) {
             queryParams.add("t=${sort.timeFilter}")
@@ -69,64 +83,70 @@ class RedditApiService {
         }
         val queryString = queryParams.joinToString("&")
 
-        val endpointsToTry = listOf(
+        val endpoints = listOf(
             "https://www.reddit.com/r/$cleanSub/${sort.endpointName}.json?$queryString",
-            "https://api.reddit.com/r/$cleanSub/${sort.endpointName}.json?$queryString",
-            "https://safereddit.com/r/$cleanSub/${sort.endpointName}.json?$queryString",
-            "https://redlib.tux.pizza/r/$cleanSub/${sort.endpointName}.json?$queryString",
-            "https://redlib.ducks.party/r/$cleanSub/${sort.endpointName}.json?$queryString",
-            "https://rl.bloat.cat/r/$cleanSub/${sort.endpointName}.json?$queryString"
+            "https://api.reddit.com/r/$cleanSub/${sort.endpointName}.json?$queryString"
         )
 
-        var lastErrorMsg = "No se pudieron obtener imágenes de r/$cleanSub"
+        var is403Encountered = false
+        var lastHttpError = ""
 
-        // 2. Try JSON endpoints with rotating User-Agents
-        for (targetUrl in endpointsToTry) {
-            val domain = try { targetUrl.substringAfter("https://").substringBefore("/") } catch (e: Exception) { targetUrl }
-            for (agent in userAgents) {
-                try {
-                    AppLogger.d(tag, "GET $domain -> $targetUrl")
-                    val request = Request.Builder()
-                        .url(targetUrl)
-                        .header("User-Agent", agent)
-                        .header("Accept", "application/json")
-                        .build()
+        for (targetUrl in endpoints) {
+            val domain = if (targetUrl.contains("api.reddit.com")) "api.reddit.com" else "www.reddit.com"
+            try {
+                AppLogger.d(tag, "GET $domain -> $targetUrl")
+                val request = Request.Builder()
+                    .url(targetUrl)
+                    .header("User-Agent", userAgent)
+                    .header("Accept", "application/json")
+                    .build()
 
-                    client.newCall(request).execute().use { response ->
-                        val code = response.code
-                        if (response.isSuccessful) {
-                            val body = response.body?.string()
-                            if (!body.isNullOrBlank() && body.trimStart().startsWith("{")) {
-                                val page = parseRedditJsonResponse(body, cleanSub)
-                                if (page.posts.isNotEmpty()) {
-                                    AppLogger.s(tag, "Éxito [$domain]: Obtenidas ${page.posts.size} imágenes válidas para r/$cleanSub (after: ${page.afterToken ?: "fin"})")
-                                    return@withContext Result.success(page)
-                                } else {
-                                    AppLogger.w(tag, "JSON válido de $domain pero 0 imágenes encontradas (posts de solo texto o filtrados)")
-                                }
+                client.newCall(request).execute().use { response ->
+                    val code = response.code
+                    if (response.isSuccessful) {
+                        val body = response.body?.string()
+                        if (!body.isNullOrBlank() && body.trimStart().startsWith("{")) {
+                            val page = parseRedditJsonResponse(body, cleanSub)
+                            if (page.posts.isNotEmpty()) {
+                                AppLogger.s(tag, "✓ $domain retornó ${page.posts.size} fotos reales para r/$cleanSub")
+                                return@withContext Result.success(page)
                             }
+                        }
+                    } else {
+                        lastHttpError = "HTTP $code"
+                        if (code == 403 || code == 401) {
+                            is403Encountered = true
+                            AppLogger.w(tag, "Respuesta $code de $domain para r/$cleanSub (Reddit bloqueó consulta sin API key)")
                         } else {
-                            lastErrorMsg = "HTTP $code en $domain"
                             AppLogger.w(tag, "Respuesta $code de $domain para r/$cleanSub")
                         }
                     }
-                } catch (e: Exception) {
-                    lastErrorMsg = "${e.javaClass.simpleName}: ${e.message}"
-                    AppLogger.d(tag, "Fallo de conexión con $domain: ${e.message}")
                 }
+            } catch (e: Exception) {
+                lastHttpError = e.message ?: e.javaClass.simpleName
+                AppLogger.d(tag, "Excepción en $domain: ${e.message}")
             }
         }
 
-        // 3. Fallback: Try Reddit RSS / Atom Feed parser
-        AppLogger.i(tag, "Intentando canal RSS de respaldo para r/$cleanSub...")
-        val rssResult = fetchFromRssFeed(cleanSub, sort, limit)
-        if (rssResult != null && rssResult.posts.isNotEmpty()) {
-            AppLogger.s(tag, "Éxito con canal RSS para r/$cleanSub: ${rssResult.posts.size} fotos encontradas")
-            return@withContext Result.success(rssResult)
+        // 3. Fallback: Try Reddit RSS / Atom Feed
+        try {
+            val rssResult = fetchFromRssFeed(cleanSub, sort, limit)
+            if (rssResult != null && rssResult.posts.isNotEmpty()) {
+                AppLogger.s(tag, "✓ Canal RSS retornó ${rssResult.posts.size} fotos para r/$cleanSub")
+                return@withContext Result.success(rssResult)
+            }
+        } catch (e: Exception) {
+            AppLogger.d(tag, "Fallo en canal RSS: ${e.message}")
         }
 
-        AppLogger.e(tag, "Todas las fuentes fallaron para r/$cleanSub. Último error: $lastErrorMsg")
-        Result.failure(Exception("Error al cargar r/$cleanSub: $lastErrorMsg"))
+        val finalMessage = if (is403Encountered) {
+            "HTTP 403: Reddit bloqueó la petición sin API Key. Configura tu Client ID y Secret en Ajustes (🔑) o en Secrets."
+        } else {
+            "No se pudieron cargar fotos de r/$cleanSub ($lastHttpError)"
+        }
+
+        AppLogger.e(tag, finalMessage)
+        Result.failure(RedditAuthRequiredException(finalMessage))
     }
 
     private fun parseRedditJsonResponse(jsonString: String, defaultSub: String): SubredditPage {
@@ -167,21 +187,44 @@ class RedditApiService {
         val numComments = item.optInt("num_comments", 0)
         val permalink = "https://reddit.com" + item.optString("permalink")
         val isVideo = item.optBoolean("is_video", false)
-        val domain = item.optString("domain", "")
-
         if (isVideo) return null
+
+        // Check self item first, then crosspost_parent_list[0] if crossposted
+        val mediaPair = extractMediaFromItem(item)
+            ?: item.optJSONArray("crosspost_parent_list")?.optJSONObject(0)?.let { extractMediaFromItem(it) }
+            ?: return null
+
+        val (validImageUrl, width, height) = mediaPair
+
+        return RedditPost(
+            id = id,
+            subreddit = subreddit,
+            title = title,
+            author = author,
+            imageUrl = validImageUrl,
+            permalink = permalink,
+            score = score,
+            numComments = numComments,
+            width = width,
+            height = height
+        )
+    }
+
+    private fun extractMediaFromItem(item: JSONObject): Triple<String, Int, Int>? {
+        if (item.optBoolean("is_video", false)) return null
+        val domain = item.optString("domain", "")
 
         var validImageUrl: String? = null
         var width = 0
         var height = 0
 
-        // 1. Check direct url / url_overridden_by_dest
+        // 1. Direct url / url_overridden_by_dest
         val directUrl = item.optString("url_overridden_by_dest", item.optString("url", "")).unescapeHtml()
         if (isImageExtension(directUrl)) {
             validImageUrl = directUrl
         }
 
-        // 2. Check preview images
+        // 2. Preview images
         val preview = item.optJSONObject("preview")
         if (preview != null) {
             val images = preview.optJSONArray("images")
@@ -201,7 +244,7 @@ class RedditApiService {
             }
         }
 
-        // 3. Check reddit gallery items
+        // 3. Reddit gallery
         val isGallery = item.optBoolean("is_gallery", false)
         if (isGallery && validImageUrl == null) {
             val mediaMetadata = item.optJSONObject("media_metadata")
@@ -223,7 +266,7 @@ class RedditApiService {
             }
         }
 
-        // 4. Imgur / i.redd.it direct check
+        // 4. Imgur / i.redd.it check
         if (validImageUrl == null && (domain.contains("imgur.com") || domain.contains("redd.it"))) {
             if (directUrl.isNotBlank() && !directUrl.endsWith(".gifv") && !directUrl.endsWith(".mp4")) {
                 validImageUrl = if (directUrl.contains("imgur.com") && !directUrl.contains(".")) {
@@ -235,19 +278,117 @@ class RedditApiService {
         }
 
         if (validImageUrl.isNullOrBlank()) return null
+        return Triple(validImageUrl, width, height)
+    }
 
-        return RedditPost(
-            id = id,
-            subreddit = subreddit,
-            title = title,
-            author = author,
-            imageUrl = validImageUrl,
-            permalink = permalink,
-            score = score,
-            numComments = numComments,
-            width = width,
-            height = height
-        )
+    private fun fetchWithOAuth(
+        cleanSub: String,
+        sort: FeedSort,
+        limit: Int,
+        after: String?,
+        clientId: String,
+        clientSecret: String
+    ): Result<SubredditPage> {
+        val tokenResult = getOAuthToken(clientId, clientSecret)
+        if (tokenResult.isFailure) {
+            return Result.failure(tokenResult.exceptionOrNull() ?: Exception("Error al autenticar con Reddit"))
+        }
+        val token = tokenResult.getOrThrow()
+
+        val queryParams = mutableListOf("limit=$limit", "raw_json=1")
+        if (sort.timeFilter != null) {
+            queryParams.add("t=${sort.timeFilter}")
+        }
+        if (!after.isNullOrBlank()) {
+            queryParams.add("after=$after")
+        }
+        val url = "https://oauth.reddit.com/r/$cleanSub/${sort.endpointName}?${queryParams.joinToString("&")}"
+
+        return try {
+            AppLogger.d("RedditOAuth", "GET oauth.reddit.com/r/$cleanSub/${sort.endpointName}?${queryParams.joinToString("&")}")
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer $token")
+                .header("User-Agent", userAgent)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val body = response.body?.string()
+                    if (!body.isNullOrBlank()) {
+                        Result.success(parseRedditJsonResponse(body, cleanSub))
+                    } else {
+                        Result.failure(Exception("Cuerpo de respuesta vacío desde oauth.reddit.com"))
+                    }
+                } else {
+                    if (response.code == 401) {
+                        synchronized(tokenLock) {
+                            cachedOAuthToken = null
+                        }
+                    }
+                    Result.failure(Exception("HTTP ${response.code} desde oauth.reddit.com para r/$cleanSub"))
+                }
+            }
+        } catch (e: Exception) {
+            AppLogger.e("RedditOAuth", "Fallo de red llamando a oauth.reddit.com", e)
+            Result.failure(e)
+        }
+    }
+
+    private fun getOAuthToken(clientId: String, clientSecret: String): Result<String> {
+        val credHash = "$clientId:$clientSecret".hashCode().toString()
+        val now = System.currentTimeMillis()
+        synchronized(tokenLock) {
+            if (cachedOAuthToken != null && cachedCredHash == credHash && now < tokenExpiryTime) {
+                return Result.success(cachedOAuthToken!!)
+            }
+        }
+
+        return try {
+            val credentials = Base64.encodeToString("$clientId:$clientSecret".toByteArray(), Base64.NO_WRAP)
+            val formBuilder = FormBody.Builder()
+            if (clientSecret.isNotBlank()) {
+                formBuilder.add("grant_type", "client_credentials")
+            } else {
+                formBuilder.add("grant_type", "https://oauth.reddit.com/grants/installed_client")
+                formBuilder.add("device_id", "DO_NOT_TRACK_THIS_DEVICE")
+            }
+
+            val request = Request.Builder()
+                .url("https://www.reddit.com/api/v1/access_token")
+                .header("Authorization", "Basic $credentials")
+                .header("User-Agent", userAgent)
+                .post(formBuilder.build())
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (response.isSuccessful) {
+                    val json = JSONObject(body)
+                    val token = json.optString("access_token")
+                    val expiresIn = json.optLong("expires_in", 3600)
+                    if (token.isNotBlank()) {
+                        synchronized(tokenLock) {
+                            cachedOAuthToken = token
+                            cachedCredHash = credHash
+                            tokenExpiryTime = System.currentTimeMillis() + (expiresIn - 60) * 1000
+                        }
+                        AppLogger.s("RedditOAuth", "Token OAuth obtenido exitosamente (expira en ${expiresIn}s)")
+                        Result.success(token)
+                    } else {
+                        val err = json.optString("error", "Token vacío")
+                        Result.failure(Exception("Reddit OAuth rechazado: $err"))
+                    }
+                } else {
+                    val err = "HTTP ${response.code} al pedir token OAuth"
+                    AppLogger.e("RedditOAuth", err)
+                    Result.failure(Exception(err))
+                }
+            }
+        } catch (e: Exception) {
+            AppLogger.e("RedditOAuth", "Excepción obteniendo token OAuth", e)
+            Result.failure(e)
+        }
     }
 
     private fun fetchFromRssFeed(cleanSub: String, sort: FeedSort, limit: Int): SubredditPage? {
@@ -265,7 +406,6 @@ class RedditApiService {
                 return parseRssXml(xml, cleanSub)
             }
         } catch (e: Exception) {
-            AppLogger.d("RedditRss", "Fallo RSS en r/$cleanSub: ${e.message}")
             return null
         }
     }
@@ -339,86 +479,6 @@ class RedditApiService {
             AppLogger.e("RedditRss", "Error parseando XML RSS", e)
         }
         return SubredditPage(posts = posts, afterToken = null)
-    }
-
-    private fun fetchWithOAuth(
-        cleanSub: String,
-        sort: FeedSort,
-        limit: Int,
-        after: String?,
-        clientId: String,
-        clientSecret: String
-    ): SubredditPage? {
-        val token = getOAuthToken(clientId, clientSecret) ?: return null
-        val queryParams = mutableListOf("limit=$limit", "raw_json=1")
-        if (sort.timeFilter != null) {
-            queryParams.add("t=${sort.timeFilter}")
-        }
-        if (!after.isNullOrBlank()) {
-            queryParams.add("after=$after")
-        }
-        val url = "https://oauth.reddit.com/r/$cleanSub/${sort.endpointName}?${queryParams.joinToString("&")}"
-
-        return try {
-            val request = Request.Builder()
-                .url(url)
-                .header("Authorization", "Bearer $token")
-                .header("User-Agent", "android:com.aistudio.redditwallpapers:v1.1.0")
-                .build()
-
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val body = response.body?.string()
-                    if (!body.isNullOrBlank()) {
-                        parseRedditJsonResponse(body, cleanSub)
-                    } else null
-                } else null
-            }
-        } catch (e: Exception) {
-            AppLogger.e("RedditOAuth", "Fallo al llamar a oauth.reddit.com", e)
-            null
-        }
-    }
-
-    private fun getOAuthToken(clientId: String, clientSecret: String): String? {
-        val now = System.currentTimeMillis()
-        if (cachedOAuthToken != null && now < tokenExpiryTime) {
-            return cachedOAuthToken
-        }
-
-        return try {
-            val credentials = Base64.encodeToString("$clientId:$clientSecret".toByteArray(), Base64.NO_WRAP)
-            val formBody = FormBody.Builder()
-                .add("grant_type", "client_credentials")
-                .build()
-
-            val request = Request.Builder()
-                .url("https://www.reddit.com/api/v1/access_token")
-                .header("Authorization", "Basic $credentials")
-                .header("User-Agent", "android:com.aistudio.redditwallpapers:v1.1.0")
-                .post(formBody)
-                .build()
-
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val json = JSONObject(response.body?.string() ?: "")
-                    val token = json.optString("access_token")
-                    val expiresIn = json.optLong("expires_in", 3600)
-                    if (token.isNotBlank()) {
-                        cachedOAuthToken = token
-                        tokenExpiryTime = now + (expiresIn - 60) * 1000
-                        AppLogger.s("RedditOAuth", "Token OAuth obtenido con éxito")
-                        token
-                    } else null
-                } else {
-                    AppLogger.w("RedditOAuth", "Error obteniendo token OAuth: ${response.code}")
-                    null
-                }
-            }
-        } catch (e: Exception) {
-            AppLogger.e("RedditOAuth", "Excepción obteniendo token OAuth", e)
-            null
-        }
     }
 
     private fun isImageExtension(url: String): Boolean {

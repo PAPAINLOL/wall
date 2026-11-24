@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Wallpaper
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -105,7 +107,11 @@ fun WallpaperCanvasViewer(
     onOpenSubreddits: () -> Unit = {},
     onRefreshAllNew: () -> Unit = {},
     onOpenLogs: () -> Unit = {},
-    isFetchingMore: Boolean = false
+    isFetchingMore: Boolean = false,
+    onOpenApiSetup: () -> Unit = {},
+    isShowingFallback: Boolean = false,
+    errorMessage: String? = null,
+    isLoading: Boolean = false
 ) {
     val context = LocalContext.current
     var currentTimeString by remember { mutableStateOf("") }
@@ -234,17 +240,65 @@ fun WallpaperCanvasViewer(
                 }
             } else {
                 Box(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = RedditOrange)
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "Buscando fotos épicas de subreddits...",
-                            color = Color.White,
-                            style = MaterialTheme.typography.bodyLarge
-                        )
+                    if (isLoading) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = RedditOrange)
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "Conectando con Reddit API...",
+                                color = Color.White,
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                        }
+                    } else {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = "Sin fotos",
+                                tint = RedditOrange,
+                                modifier = Modifier.size(44.dp)
+                            )
+                            Text(
+                                text = errorMessage ?: "No hay fotos disponibles para los subreddits activos.",
+                                color = Color.White,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                FilledTonalButton(
+                                    onClick = onRefreshAllNew,
+                                    modifier = Modifier.testTag("empty_retry_button")
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Reintentar")
+                                }
+                                FilledTonalButton(
+                                    onClick = onOpenApiSetup,
+                                    modifier = Modifier.testTag("empty_api_setup_button")
+                                ) {
+                                    Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("API Reddit")
+                                }
+                                FilledTonalButton(
+                                    onClick = onOpenLogs,
+                                    modifier = Modifier.testTag("empty_logs_button")
+                                ) {
+                                    Icon(Icons.Default.Terminal, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Logs")
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -423,6 +477,24 @@ fun WallpaperCanvasViewer(
 
                             Spacer(modifier = Modifier.width(6.dp))
 
+                            // Reddit API Setup button
+                            IconButton(
+                                onClick = onOpenApiSetup,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(Color.White.copy(alpha = 0.15f), CircleShape)
+                                    .testTag("open_api_setup_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Key,
+                                    contentDescription = "Configurar API de Reddit",
+                                    tint = RedditOrange,
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(6.dp))
+
                             IconButton(
                                 onClick = onToggleTvMode,
                                 modifier = Modifier
@@ -436,6 +508,91 @@ fun WallpaperCanvasViewer(
                                     tint = Color.White,
                                     modifier = Modifier.size(20.dp)
                                 )
+                            }
+                        }
+                    }
+
+                    if (isLoading) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.85f),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = NeonCyan)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Conectando con Reddit...", color = NeonCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+
+                    if (isShowingFallback || errorMessage != null) {
+                        val bannerText = when {
+                            isShowingFallback && !errorMessage.isNullOrBlank() ->
+                                "⚠️ Respaldo offline: $errorMessage"
+                            isShowingFallback ->
+                                "⚠️ Modo respaldo offline: Configura la API de Reddit para cargar fotos reales."
+                            else ->
+                                "⚠️ $errorMessage"
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Surface(
+                            color = Color(0xFFC62828).copy(alpha = 0.92f),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("fallback_warning_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Warning, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = bannerText,
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 3,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    color = Color.Black.copy(alpha = 0.35f),
+                                    shape = RoundedCornerShape(6.dp),
+                                    modifier = Modifier
+                                        .clickable { onOpenLogs() }
+                                        .testTag("banner_logs_button")
+                                ) {
+                                    Text(
+                                        text = "Logs",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    color = Color.White,
+                                    shape = RoundedCornerShape(6.dp),
+                                    modifier = Modifier
+                                        .clickable { onOpenApiSetup() }
+                                        .testTag("banner_api_setup_button")
+                                ) {
+                                    Text(
+                                        text = "API",
+                                        color = Color.Black,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
                             }
                         }
                     }

@@ -25,6 +25,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.components.FavoritesAndGallerySheet
 import com.example.ui.components.LogsSheet
+import com.example.ui.components.RedditApiSetupDialog
 import com.example.ui.components.SettingsSheet
 import com.example.ui.components.SubredditsSheet
 import com.example.ui.components.WallpaperCanvasViewer
@@ -88,6 +89,7 @@ fun WallpaperAppContent(viewModel: WallpaperViewModel) {
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showGallerySheet by remember { mutableStateOf(false) }
     var showLogsSheet by remember { mutableStateOf(false) }
+    var showRedditApiDialog by remember { mutableStateOf(false) }
 
     // Photo picker launcher for picking from Android local gallery
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -133,7 +135,11 @@ fun WallpaperAppContent(viewModel: WallpaperViewModel) {
         onOpenSubreddits = { showSubredditsSheet = true },
         onRefreshAllNew = { viewModel.refreshWithAllNew() },
         onOpenLogs = { showLogsSheet = true },
-        isFetchingMore = uiState.isFetchingMore
+        isFetchingMore = uiState.isFetchingMore,
+        onOpenApiSetup = { showRedditApiDialog = true },
+        isShowingFallback = uiState.isShowingFallback,
+        errorMessage = uiState.error,
+        isLoading = uiState.isLoading
     )
 
     // Bottom Sheets
@@ -160,7 +166,8 @@ fun WallpaperAppContent(viewModel: WallpaperViewModel) {
             onSetMaxPostsLimit = { viewModel.setMaxPostsLimit(it) },
             onSetRedditApiCredentials = { id, sec -> viewModel.setRedditApiCredentials(id, sec) },
             onOpenLogs = { showLogsSheet = true },
-            onRefreshAllNew = { viewModel.refreshWithAllNew() }
+            onRefreshAllNew = { viewModel.refreshWithAllNew() },
+            onOpenApiSetup = { showRedditApiDialog = true }
         )
     }
 
@@ -189,6 +196,17 @@ fun WallpaperAppContent(viewModel: WallpaperViewModel) {
     if (showLogsSheet) {
         LogsSheet(
             onDismiss = { showLogsSheet = false }
+        )
+    }
+
+    if (showRedditApiDialog) {
+        RedditApiSetupDialog(
+            initialClientId = uiState.settings.redditClientId,
+            initialClientSecret = uiState.settings.redditClientSecret,
+            onSaveAndRefresh = { cid, secret ->
+                viewModel.setRedditApiCredentials(cid, secret)
+            },
+            onDismiss = { showRedditApiDialog = false }
         )
     }
 }
