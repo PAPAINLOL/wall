@@ -41,6 +41,16 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
+      - name: Configurar .env desde GitHub Secrets (opcional)
+        env:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+        run: |
+          if [ -n "$REDDIT_CLIENT_ID" ]; then
+            printf 'REDDIT_CLIENT_ID=%s\n' "$REDDIT_CLIENT_ID" > .env
+            printf 'REDDIT_CLIENT_SECRET=%s\n' "$REDDIT_CLIENT_SECRET" >> .env
+          fi
+
       - name: Build APK (debug)
         run: gradle assembleDebug
 
